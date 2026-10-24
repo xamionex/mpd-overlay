@@ -1,4 +1,44 @@
-music_dir = "/home/moskas/Music/"
+[mpd]
+music_dir = "/home/you/Music"
 ip = "127.0.0.1"
 port = "6600"
 use_cover = true
+
+[overlay]
+width = 640
+height = 200
+margin = 40
+padding = 0
+corner_radius = 0
+cover_radius = 0
+position = "bottom"
+monitor = "primary"
+timeout_ms = 4000
+fade_ms = 500
+progress = "bar"
+center_text = true
+scroll_ms = 8000
+progress_bar_blend = 0
+matching_colors = true
+title_matching_colors = true
+title_invert_colors = false
+background_progress_matching_colors = true
+background_progress_invert = false
+progress_matching_colors = false
+progress_invert_colors = false
+background_alpha = 1.0
+text_alpha = 1.0
+progress_alpha = 1.0
+cover_alpha = 1.0
+background = "progress"
+border = "#161616"
+always_brighten_colors = false
+title_color = "#ffffff"
+artist_color = "#ffffff"
+time_color = "#ffffff"
+shadow_color = "#000000"
+fallback_color = "#2c2c2c"
+progress_start_color = "#ffffff"
+progress_mid_color = "#ffffff"
+progress_blend_color = "#000000"
+progress_end_color = "#000000"

@@ -1,15 +1,18 @@
 [package]
-name = "mpd-notify-rs"
+name = "mpd-overlay"
 version = "0.1.3"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-#notify = "5.1.0"
-notify-rust = "4"
+gtk = "0.18"
+pangocairo = "0.18"
 mpd = "0.1.0"
+ratatui = "0.30"
+
 toml = "0.8.0"
 serde = { version = "1.0.156" , features = ["derive"] }
 dirs = "5.0.1"
 walkdir = "2.4.0"
+toml_edit = "0.25"

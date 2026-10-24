@@ -22,6 +22,11 @@
             rust-analyzer
             rustPackages.clippy
             rustfmt
+            pkg-config
+            gtk3
+            pango
+            cairo
+            gdk-pixbuf
           ];
         };
       });

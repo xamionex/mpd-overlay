@@ -1,54 +1,56 @@
-# About application
+# mpd-overlay
 
-It uses notify-rust so it should work with any notification daemon
-like dunst or KDE/GNOME/XFCE, Windows notifications etc. For album covers it looks
-inside a directory that mpd returns as song file directory and it
-checks whether cover.png or cover.jpg exists in the directory and uses
-it as an icon.  
+An AI-assisted custom MPD now-playing overlay for KDE Plasma on Wayland.
+It displays track information in an overlay over fullscreen applications.
+Based off of my old obs widget and some overlays I made for funsies
 
-Example screenshot with dunst:  
+## Automatic installation
 
-![](./doc/example.png)
+Install the latest GitHub release system-wide:
 
-Structure of the notification is:  
-Summary: Now playing:  
-Contents:  
-- Artist  
-- Title  
-- Album  
-Icon: Album cover  
-
-# Dependencies
-
-``` toml
-[dependencies]
-notify-rust = "4"
-mpd = "0.0.12"
-toml = "0.7.2"
-serde = "1.0.152"
-dirs = "4.0.0"
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/mpd-overlay/main/install.sh | sh
 ```
 
-# Roadmap
+Install it only for your user (to `~/.local/bin`):
 
-- Improve regex to find covers in subfolders (ex. Album has Disc 1 and Disc 2 directories in which covers are located.)
-- More configuration options:
-  - Text formatting
-  - Timeout setting
-- Support for running as a systemd daemon
-
-# Configuration
-
-By default application will look for your \$HOME/.config directory (or $HOME/AppData/Roaming/ for Windows). It
-doesn\'t create it and config file by default. Default fallback config
-will be added in future commits.
-Default config:
-
-``` toml
-music_dir = "/home/moskas/Music/"
-ip = "127.0.0.1"
-port = "6600"
-use_cover = true
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/mpd-overlay/main/install.sh | sh -s -- --user
 ```
 
-The exact same config file is also located in doc directory.
+For help:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/mpd-overlay/main/install.sh | sh -s -- --help
+```
+
+The system-wide install places `mpd-overlay` in `/usr/local/bin`. The user install places it in `~/.local/bin`; make sure that directory is on your `PATH`.
+
+## Configuration
+
+Configuration is read from `~/.config/mpd-overlay/config.toml`. On first run, a default file is created there.
+
+Open the interactive configuration editor:
+
+```sh
+mpd-overlay -c
+```
+
+Enable or disable the user service:
+
+```sh
+mpd-overlay -e
+mpd-overlay -d
+```
+
+## Dependencies
+
+- GTK 3 (`gtk3`)
+- MPD client support
+- XWayland for the transparent click-through overlay
+
+## Build from source
+
+```sh
+./devinstall.sh
+```
