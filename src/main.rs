@@ -83,8 +83,9 @@ fn write_service_unit() -> Result<std::path::PathBuf, Box<dyn std::error::Error>
         "[Unit]
 Description=MPD Overlay
 Documentation=man:mpd-overlay(1)
-After=mpd.service
+After=mpd.service graphical-session.target
 Wants=mpd.service
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
@@ -164,7 +165,7 @@ fn run_daemon() {
 
     if let Err(error) = gtk::init() {
         eprintln!("Could not initialize GTK: {error}");
-        return;
+        std::process::exit(1);
     }
 
     let overlay = overlay::Overlay::new(config.overlay.clone());
