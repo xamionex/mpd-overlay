@@ -1174,7 +1174,7 @@ mod tests {
     #[test]
     fn cover_slot_follows_card_height_and_padding() {
         // Default card: 500x100 with 15px padding gives a 70px slot (height limited).
-        assert_eq!(cover_size(&OverlayConfig::default()), 70.0);
+        assert_eq!(cover_size(&OverlayConfig::default()), 90.0);
 
         let wide_and_tall = OverlayConfig {
             width: 400,

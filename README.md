@@ -1,7 +1,7 @@
 # mpd-overlay
 
-An AI-assisted custom MPD now-playing overlay for KDE Plasma on Wayland.
-It displays track information in an overlay over fullscreen applications.
+An AI-assisted custom MPD now-playing overlay for KDE Plasma on Wayland. \
+It displays track information in an overlay over fullscreen applications. \
 Based off of my old obs widget and some overlays I made for funsies
 
 ## Automatic installation

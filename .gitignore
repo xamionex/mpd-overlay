@@ -4,3 +4,4 @@
 /src/mpd-notify-rs/
 .direnv/
 README.html
+Cargo.lock

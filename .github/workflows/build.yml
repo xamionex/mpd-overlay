@@ -1,16 +1,26 @@
 name: Build
 
 on:
+  workflow_dispatch:
   push:
-    tags: [ "v*" ]
+    tags: ["v*"]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**/*'
 
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Build (linux)
-    runs-on: ubuntu-latest
+    name: Build (Linux)
+    runs-on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v6
@@ -25,7 +35,7 @@ jobs:
         with:
           key: x86_64-unknown-linux-gnu
 
-      # Zig is used for glibc compatibility so the binary runs on SteamOS.
+      # Zig provides glibc 2.28 compatibility for SteamOS.
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
@@ -36,26 +46,51 @@ jobs:
         with:
           tool: cargo-zigbuild
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libssl-dev \
+            pkg-config \
+            cmake \
+            libgtk-3-dev \
+            libclang-dev \
+            libglib2.0-dev \
+            libx11-dev
+
       - name: Test
         run: cargo test
 
+      - name: Define GIT_HASH
+        id: sha
+        run: echo "GIT_HASH=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build release
         run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.28
+        env:
+          GIT_HASH: ${{ steps.sha.outputs.GIT_HASH }}
+          RUSTFLAGS: "-Awarnings -L native=/usr/lib/x86_64-linux-gnu -L native=/usr/lib"
+          CFLAGS: "-isystem /usr/include"
+          PKG_CONFIG_ALLOW_SYSTEM_CFLAGS: "1"
+          PKG_CONFIG_ALLOW_SYSTEM_LIBS: "1"
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
         with:
           name: mpd-overlay-linux
           path: target/x86_64-unknown-linux-gnu/release/mpd-overlay
+          if-no-files-found: error
 
   release:
     name: Publish Release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: mpd-overlay-linux
           path: ./dist
