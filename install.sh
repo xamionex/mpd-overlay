@@ -1,38 +1,34 @@
 #!/usr/bin/env bash
-# Installer for game-launcher.
+# Installer for mpd-overlay.
 #
-# Downloads the latest release binary from GitHub and installs it, plus the bundled dxvk config.
-# Also refreshes the payload cache (EOS-Proxy dll and netsock fix.so) so a reinstall picks up the latest upstream releases.
+# Downloads the latest release binary from GitHub and installs it.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user
+#   curl -fsSL https://raw.githubusercontent.com/xamionex/mpd-overlay/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/xamionex/mpd-overlay/main/install.sh | sh -s -- --user
 #
 # Root install (default, preferred):
-#   - binary goes to /usr/local/bin/game
+#   - binary goes to /usr/local/bin/mpd-overlay
 #   - works in Steam Deck gaming mode without specifying the full path
 #   - re-runs itself with sudo when not already root
 #
 # User install (--user):
-#   - binary goes to ~/.local/bin/game
+#   - binary goes to ~/.local/bin/mpd-overlay
 #   - gaming mode may not find it, see the README
-#
-# The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf, even for root installs.
-# Payloads go to the invoking user's config directory (honoring XDG_CONFIG_HOME), and a failed payload fetch is only a warning: the binary embeds fallback copies.
-# LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so; a previous ~/.local/lib/liblinuwux.so is removed.
 set -eu
 
 REPO="xamionex/mpd-overlay"
 BIN_NAME="mpd-overlay"
 # Overridable for testing and forks.
-API="${GAME_LAUNCHER_API:-https://api.github.com/repos/$REPO/releases/latest}"
-RAW_URL="${GAME_LAUNCHER_RAW:-https://raw.githubusercontent.com/$REPO/main}"
+API="${MPD_OVERLAY_API:-https://api.github.com/repos/$REPO/releases/latest}"
+RAW_URL="${MPD_OVERLAY_RAW:-https://raw.githubusercontent.com/$REPO/main}"
 
 info()  { printf '%s\n' "==> $*"; }
 warn()  { printf '%s\n' "!! $*" >&2; }
 die()   { printf '%s\n' "!! $*" >&2; exit 1; }
 
-# The user the install is for. For root installs this is the invoking user, not root, so dxvk and the sudo re-run target the right home directory.
+# The user the install is for. For root installs this is the invoking user, not root,
+# so the conflict check looks in the right home directory.
 if [ "$(id -u)" -eq 0 ]; then
     TARGET_USER="${SUDO_USER:-}"
     [ -n "$TARGET_USER" ] || die "running as root without SUDO_USER; run as a normal user instead"
@@ -43,25 +39,6 @@ fi
 # Resolve the target user's home directory without relying on $HOME, which sudo may or may not preserve.
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [ -n "$TARGET_HOME" ] || die "could not resolve home directory for user $TARGET_USER"
-
-# Root mode runs this script as root, so directories it creates under the
-# user's home would belong to root and the launcher, which runs as the user,
-# would fail with "Permission denied (os error 13)". Hand root-owned
-# directories on the path back to the target user, never leaving the home tree.
-fix_owner() {
-    path="$1"
-    case "$path" in
-        "$TARGET_HOME"/*) ;;
-        *) return ;;
-    esac
-    while [ -n "$path" ] && [ "$path" != "/" ] && [ "$path" != "$TARGET_HOME" ]; do
-        owner="$(stat -c '%U' "$path" 2>/dev/null || true)"
-        if [ "$owner" = "root" ]; then
-            chown "$TARGET_USER" "$path" 2>/dev/null || true
-        fi
-        path="$(dirname "$path")"
-    done
-}
 
 # Ask a yes/no question on the terminal.
 # The script is usually piped from curl, so stdin is the script itself and cannot be read: the question goes to /dev/tty.
@@ -118,7 +95,7 @@ elif [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<EOF
 Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [-- --user]
 
-Installs the game-launcher binary, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock and linuwux loaders).
+Installs the mpd-overlay binary.
 
 Root install (default, preferred):
   binary at /usr/local/bin/$BIN_NAME, works in Steam Deck gaming mode without specifying the full path.
@@ -128,9 +105,6 @@ User install (--user):
   binary at ~/.local/bin/$BIN_NAME.
 
 An existing copy in the other location is reported, and removed when you confirm, so PATH order cannot pick a stale one.
-The dxvk config always goes to ~/.config/dxvk/dxvk.conf for the invoking user.
-Payloads go to the invoking user's config directory.
-LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so.
 EOF
     exit 0
 elif [ -n "${1:-}" ]; then
@@ -138,13 +112,18 @@ elif [ -n "${1:-}" ]; then
 fi
 
 # Root installs re-run themselves with sudo so the binary can be written to /usr/local/bin.
-# The script is re-downloaded inside the sudo shell because $0 is not a usable path when the script is piped from curl.
+# Re-run the local file when this is one; only re-download when the script is piped from curl
+# (in which case $0 is not a usable path).
 if [ "$MODE" = "root" ] && [ "$(id -u)" -ne 0 ]; then
     if command -v sudo >/dev/null 2>&1; then
         info "root install requested, re-running with sudo"
-        exec sudo TARGET_USER="$TARGET_USER" TARGET_HOME="$TARGET_HOME" \
-            XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
-            GAME_LAUNCHER_API="$API" GAME_LAUNCHER_RAW="$RAW_URL" \
+        if [ -f "$0" ] && [ -r "$0" ]; then
+            exec sudo \
+                MPD_OVERLAY_API="$API" MPD_OVERLAY_RAW="$RAW_URL" \
+                bash "$(readlink -f "$0")" --root
+        fi
+        exec sudo \
+            MPD_OVERLAY_API="$API" MPD_OVERLAY_RAW="$RAW_URL" \
             bash -c "curl -fsSL '$RAW_URL/install.sh' | bash -s -- --root"
     fi
     die "root install requested but sudo is not available; use --user instead"
@@ -155,13 +134,6 @@ if [ "$MODE" = "root" ]; then
 else
     BIN_DIR="$TARGET_HOME/.local/bin"
 fi
-DXVK_DIR="$TARGET_HOME/.config/dxvk"
-# The launcher resolves its config directory through XDG_CONFIG_HOME, so the payload cache has to follow the same rule.
-CONFIG_HOME="${XDG_CONFIG_HOME:-$TARGET_HOME/.config}"
-PAYLOAD_DIR="$CONFIG_HOME/game-launcher/payloads"
-# LinUwUx has its own home; older installers dropped it into ~/.local/lib.
-LINUWUX_DIR="$TARGET_HOME/.local/share/linuwux"
-OLD_LINUWUX="$TARGET_HOME/.local/lib/liblinuwux.so"
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
 command -v mktemp >/dev/null 2>&1 || die "mktemp is required but not installed"
@@ -169,8 +141,27 @@ command -v mktemp >/dev/null 2>&1 || die "mktemp is required but not installed"
 info "fetching latest release info for $REPO"
 RELEASE_JSON="$(curl -fsSL "$API")" || die "failed to reach the GitHub API"
 
-ASSET_URL="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"browser_download_url": *"\([^"]*\/game\)".*/\1/p' | head -n 1)"
-[ -n "$ASSET_URL" ] || die "no release asset named '$BIN_NAME' found; create a release first (see README)"
+# Pull every browser_download_url out of the release JSON, one per line.
+extract_asset_urls() {
+    printf '%s' "$RELEASE_JSON" \
+        | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
+        | sed 's/.*"\(https[^"]*\)"/\1/'
+}
+
+# Prefer an exact /mpd-overlay asset, then fall back to any name that starts with it,
+# ignoring checksum/signature sidecar files.
+ASSET_URL="$(extract_asset_urls | grep -E '/mpd-overlay$' | head -n 1)"
+if [ -z "$ASSET_URL" ]; then
+    ASSET_URL="$(extract_asset_urls \
+        | grep -E '/mpd-overlay[._-]' \
+        | grep -vE '\.(sha256|sha512|sha1|md5|sig|asc|txt|json)$' \
+        | head -n 1)"
+fi
+if [ -z "$ASSET_URL" ]; then
+    warn "release assets found:"
+    extract_asset_urls | sed 's#.*/##' >&2 || true
+    die "no release asset named '$BIN_NAME' found; create a release first (see README)"
+fi
 
 TAG="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
 info "downloading $BIN_NAME ${TAG:+($TAG)}"
@@ -190,68 +181,6 @@ mkdir -p "$BIN_DIR"
 install -m 755 "$TMP_DIR/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
 check_conflicting_install
-
-info "installing dxvk config to $DXVK_DIR/dxvk.conf"
-mkdir -p "$DXVK_DIR"
-# Only chown the directory itself: dxvk may be a symlink into a repo, which
-# chown -R would follow into unrelated files.
-fix_owner "$DXVK_DIR"
-curl -fsSL -o "$DXVK_DIR/dxvk.conf" "$RAW_URL/dxvk/dxvk.conf" \
-    || die "failed to download dxvk.conf"
-chown "$TARGET_USER" "$DXVK_DIR/dxvk.conf" 2>/dev/null || true
-
-# Refresh the payload cache. Best effort: the binary embeds fallback copies, so a failed fetch is a warning rather than a fatal error.
-info "refreshing payloads in $PAYLOAD_DIR"
-
-fetch_payload() {
-    url="$1"
-    name="$2"
-    if curl -fsSL --connect-timeout 10 --max-time 300 -o "$PAYLOAD_DIR/$name.part" "$url" \
-        && mv "$PAYLOAD_DIR/$name.part" "$PAYLOAD_DIR/$name"; then
-        chown "$TARGET_USER" "$PAYLOAD_DIR/$name" 2>/dev/null || true
-        info "payload $name updated"
-    else
-        rm -f "$PAYLOAD_DIR/$name.part"
-        warn "could not fetch $name, the launcher will use its bundled copy"
-    fi
-}
-
-if mkdir -p "$PAYLOAD_DIR"; then
-    fix_owner "$PAYLOAD_DIR"
-    # Also fix files inside (payloads and config written by an older installer).
-    chown -R "$TARGET_USER" "$(dirname "$PAYLOAD_DIR")" 2>/dev/null || true
-    fetch_payload "https://github.com/yesyes0649/eos-proxy/releases/latest/download/EOSSDK-Win64-Shipping.dll" "EOSSDK-Win64-Shipping.dll"
-    fetch_payload "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so" "netsock.so"
-else
-    warn "could not create $PAYLOAD_DIR, skipping payload refresh"
-fi
-
-# LinUwUx lives under ~/.local/share/linuwux, not in the payload cache.
-info "refreshing linuwux in $LINUWUX_DIR"
-
-if mkdir -p "$LINUWUX_DIR"; then
-    fix_owner "$LINUWUX_DIR"
-    if curl -fsSL --connect-timeout 10 --max-time 300 -o "$LINUWUX_DIR/LinUwUx.so.part" \
-        "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so" \
-        && mv "$LINUWUX_DIR/LinUwUx.so.part" "$LINUWUX_DIR/LinUwUx.so"; then
-        chown "$TARGET_USER" "$LINUWUX_DIR/LinUwUx.so" 2>/dev/null || true
-        info "linuwux updated"
-    else
-        rm -f "$LINUWUX_DIR/LinUwUx.so.part"
-        warn "could not fetch LinUwUx.so, the launcher will use its bundled copy"
-    fi
-
-    # Older installers placed linuwux at ~/.local/lib/liblinuwux.so; drop it now that the new path is in use.
-    if [ -e "$OLD_LINUWUX" ] || [ -L "$OLD_LINUWUX" ]; then
-        if rm -f "$OLD_LINUWUX"; then
-            info "removed previous linuwux at $OLD_LINUWUX"
-        else
-            warn "could not remove $OLD_LINUWUX"
-        fi
-    fi
-else
-    warn "could not create $LINUWUX_DIR, skipping linuwux refresh"
-fi
 
 info "done"
 if [ "$MODE" = "root" ]; then
