@@ -115,6 +115,7 @@ fn run_systemctl(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
 fn enable_service() -> Result<(), Box<dyn std::error::Error>> {
     write_service_unit()?;
     run_systemctl(&["daemon-reload"])?;
+    run_systemctl(&["disable", "--now", "mpd-overlay.service"])?;
     run_systemctl(&["enable", "--now", "mpd-overlay.service"])?;
     println!("Enabled and started mpd-overlay.service");
     Ok(())

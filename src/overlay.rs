@@ -21,7 +21,7 @@ const TICK_INTERVAL: Duration = Duration::from_millis(16);
 /// Redraw interval while nothing moves quickly: only the progress bar and clock.
 const IDLE_REDRAW: Duration = Duration::from_millis(200);
 /// Redraw interval while a long title or artist scrolls.
-const MARQUEE_REDRAW: Duration = Duration::from_millis(33);
+const MARQUEE_REDRAW: Duration = Duration::from_millis(16);
 /// Cover art fades in over this long when it arrives after the card is already up.
 const COVER_REVEAL: Duration = Duration::from_millis(200);
 
@@ -118,29 +118,29 @@ impl Overlay {
 
         let inner = Rc::new(RefCell::new(Inner {
             config: config.clone(),
-                                         window: window.clone(),
-                                         area: area.clone(),
-                                         now: None,
-                                         cover: None,
-                                         cover_source: None,
-                                         cover_shown_at: None,
-                                         cover_ptr: None,
-                                         last_draw: Instant::now(),
-                                         accent: fallback,
-                                         average_color: None,
-                                         fallback,
-                                         opacity: 0.0,
-                                         fade_from: 0.0,
-                                         fade_to: 0.0,
-                                         fade_started: Instant::now(),
-                                         visible_until: None,
-                                         received_at: None,
-                                         ticker_running: false,
-                                         initialized: false,
-                                         last_key: None,
-                                         last_state: None,
-                                         pending_now: None,
-                                         transitioning: false,
+            window: window.clone(),
+            area: area.clone(),
+            now: None,
+            cover: None,
+            cover_source: None,
+            cover_shown_at: None,
+            cover_ptr: None,
+            last_draw: Instant::now(),
+            accent: fallback,
+            average_color: None,
+            fallback,
+            opacity: 0.0,
+            fade_from: 0.0,
+            fade_to: 0.0,
+            fade_started: Instant::now(),
+            visible_until: None,
+            received_at: None,
+            ticker_running: false,
+            initialized: false,
+            last_key: None,
+            last_state: None,
+            pending_now: None,
+            transitioning: false,
         }));
 
         {
@@ -148,19 +148,19 @@ impl Overlay {
             area.connect_draw(move |_, cr| {
                 let inner = inner.borrow();
                 let elapsed = inner
-                .now
-                .as_ref()
-                .and_then(|now| smooth_elapsed(now, inner.received_at));
+                    .now
+                    .as_ref()
+                    .and_then(|now| smooth_elapsed(now, inner.received_at));
                 let progress = progress_for(inner.now.as_ref(), elapsed);
                 let frame = Frame {
                     config: &inner.config,
                     now: inner.now.as_ref(),
-                              cover: inner.cover.as_ref(),
-                              accent: inner.accent,
-                              opacity: inner.opacity,
-                              elapsed,
-                              progress,
-                              cover_reveal: cover_reveal(inner.cover_shown_at),
+                    cover: inner.cover.as_ref(),
+                    accent: inner.accent,
+                    opacity: inner.opacity,
+                    elapsed,
+                    progress,
+                    cover_reveal: cover_reveal(inner.cover_shown_at),
                 };
                 render::draw(cr, inner.config.width, inner.config.height, &frame);
                 glib::Propagation::Stop
@@ -404,96 +404,96 @@ impl Overlay {
             && inner.fade_to <= 0.0
             && inner.pending_now.is_some()
             && (inner.opacity - 0.0).abs() <= 0.001
-            {
-                if let Some(next) = inner.pending_now.take() {
-                    let missed_key = inner.last_key != next.song_key;
-                    update_cover(&mut inner, &next);
-                    inner.now = Some(next.clone());
-                    inner.received_at = Some(now);
-                    inner.last_key = next.song_key.clone();
-                    inner.last_state = Some(next.state);
-                    inner.initialized = true;
+        {
+            if let Some(next) = inner.pending_now.take() {
+                let missed_key = inner.last_key != next.song_key;
+                update_cover(&mut inner, &next);
+                inner.now = Some(next.clone());
+                inner.received_at = Some(now);
+                inner.last_key = next.song_key.clone();
+                inner.last_state = Some(next.state);
+                inner.initialized = true;
 
-                    inner.visible_until = if inner.config.timeout_ms == 0 {
-                        None
-                    } else {
-                        Some(now + Duration::from_millis(inner.config.timeout_ms))
-                    };
+                inner.visible_until = if inner.config.timeout_ms == 0 {
+                    None
+                } else {
+                    Some(now + Duration::from_millis(inner.config.timeout_ms))
+                };
 
-                    if inner.config.fade_ms == 0 {
-                        inner.opacity = 1.0;
-                        inner.fade_from = 1.0;
-                        inner.fade_to = 1.0;
-                        inner.transitioning = false;
-                    } else {
-                        inner.fade_from = 0.0;
-                        inner.fade_to = 1.0;
-                        inner.fade_started = now;
-                        inner.transitioning = true;
-                    }
-                    needs_draw = true;
-                    let _ = missed_key;
-                }
-            }
-
-            if inner
-                .visible_until
-                .map(|until| now >= until)
-                .unwrap_or(false)
-                && inner.fade_to > 0.0
-                {
-                    inner.visible_until = None;
-                    start_fade(&mut inner, 0.0, now);
-                }
-
-                if (inner.opacity - inner.fade_to).abs() > 0.0001 {
-                    let duration = inner.config.fade_ms as f64 / 1000.0;
-                    let t = if duration <= 0.0 {
-                        1.0
-                    } else {
-                        ((now - inner.fade_started).as_secs_f64() / duration).clamp(0.0, 1.0)
-                    };
-                    let eased = t * t * (3.0 - 2.0 * t);
-                    inner.opacity = inner.fade_from + (inner.fade_to - inner.fade_from) * eased;
-                    needs_draw = true;
-                } else if (inner.opacity - inner.fade_to).abs() > f64::EPSILON {
-                    inner.opacity = inner.fade_to;
-                    needs_draw = true;
-                }
-
-                if inner.opacity <= 0.0001 && inner.fade_to <= 0.0 && !inner.transitioning {
-                    inner.opacity = 0.0;
-                    inner.window.hide();
-                    return false;
-                }
-
-                if inner.transitioning && (inner.opacity - 1.0).abs() <= 0.001 && inner.fade_to >= 0.999 {
+                if inner.config.fade_ms == 0 {
+                    inner.opacity = 1.0;
+                    inner.fade_from = 1.0;
+                    inner.fade_to = 1.0;
                     inner.transitioning = false;
-                    inner.pending_now = None;
-                    needs_draw = true;
+                } else {
+                    inner.fade_from = 0.0;
+                    inner.fade_to = 1.0;
+                    inner.fade_started = now;
+                    inner.transitioning = true;
                 }
+                needs_draw = true;
+                let _ = missed_key;
+            }
+        }
 
-                // Fades always redraw every tick (handled above).
-                // Otherwise redraw only as often as something visibly changes: quickly while a title scrolls or a cover fades in, slowly for the progress bar and clock.
-                if inner.opacity > 0.0 {
-                    let revealing = inner
-                        .cover_shown_at
-                        .map_or(false, |shown| shown.elapsed() < COVER_REVEAL);
-                    let every = if render::marquee_active() {
-                        MARQUEE_REDRAW
-                    } else {
-                        IDLE_REDRAW
-                    };
-                    if revealing || inner.last_draw.elapsed() >= every {
-                        needs_draw = true;
-                    }
-                }
-                if needs_draw {
-                    inner.last_draw = Instant::now();
-                    inner.area.queue_draw();
-                }
+        if inner
+            .visible_until
+            .map(|until| now >= until)
+            .unwrap_or(false)
+            && inner.fade_to > 0.0
+        {
+            inner.visible_until = None;
+            start_fade(&mut inner, 0.0, now);
+        }
 
-                true
+        if (inner.opacity - inner.fade_to).abs() > 0.0001 {
+            let duration = inner.config.fade_ms as f64 / 1000.0;
+            let t = if duration <= 0.0 {
+                1.0
+            } else {
+                ((now - inner.fade_started).as_secs_f64() / duration).clamp(0.0, 1.0)
+            };
+            let eased = t * t * (3.0 - 2.0 * t);
+            inner.opacity = inner.fade_from + (inner.fade_to - inner.fade_from) * eased;
+            needs_draw = true;
+        } else if (inner.opacity - inner.fade_to).abs() > f64::EPSILON {
+            inner.opacity = inner.fade_to;
+            needs_draw = true;
+        }
+
+        if inner.opacity <= 0.0001 && inner.fade_to <= 0.0 && !inner.transitioning {
+            inner.opacity = 0.0;
+            inner.window.hide();
+            return false;
+        }
+
+        if inner.transitioning && (inner.opacity - 1.0).abs() <= 0.001 && inner.fade_to >= 0.999 {
+            inner.transitioning = false;
+            inner.pending_now = None;
+            needs_draw = true;
+        }
+
+        // Fades always redraw every tick (handled above).
+        // Otherwise redraw only as often as something visibly changes: quickly while a title scrolls or a cover fades in, slowly for the progress bar and clock.
+        if inner.opacity > 0.0 {
+            let revealing = inner
+                .cover_shown_at
+                .map_or(false, |shown| shown.elapsed() < COVER_REVEAL);
+            let every = if render::marquee_active() {
+                MARQUEE_REDRAW
+            } else {
+                IDLE_REDRAW
+            };
+            if revealing || inner.last_draw.elapsed() >= every {
+                needs_draw = true;
+            }
+        }
+        if needs_draw {
+            inner.last_draw = Instant::now();
+            inner.area.queue_draw();
+        }
+
+        true
     }
 }
 
@@ -611,13 +611,13 @@ fn smooth_elapsed(now: &NowPlaying, received_at: Option<Instant>) -> Option<Dura
     }
 
     let extra = received_at
-    .map(|received_at| received_at.elapsed())
-    .unwrap_or_default();
+        .map(|received_at| received_at.elapsed())
+        .unwrap_or_default();
     let total = elapsed + extra;
 
     Some(match now.duration {
         Some(duration) if !duration.is_zero() => total.min(duration),
-         _ => total,
+        _ => total,
     })
 }
 
@@ -630,8 +630,8 @@ fn progress_for(now: Option<&NowPlaying>, elapsed: Option<Duration>) -> f64 {
     }
 
     elapsed
-    .map(|elapsed| (elapsed.as_secs_f64() / duration.as_secs_f64()).clamp(0.0, 1.0))
-    .unwrap_or(0.0)
+        .map(|elapsed| (elapsed.as_secs_f64() / duration.as_secs_f64()).clamp(0.0, 1.0))
+        .unwrap_or(0.0)
 }
 
 fn update_cover(inner: &mut Inner, now: &NowPlaying) {
