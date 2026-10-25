@@ -14,7 +14,7 @@ use pangocairo::functions as pangocairo;
 
 use crate::{
     color::{parse_hex, Rgb},
-    config::OverlayConfig,
+    config::{GradientFlow, OverlayConfig},
     song_info::NowPlaying,
 };
 
@@ -28,7 +28,7 @@ const TEXT_SHADOW_OFFSETS: [(f64, f64, f64); 2] = [(1.0, 1.0, 0.55), (2.0, 2.0, 
 /// Room kept above and below a scrolling text line so its glow isn't cut off flat.
 const MARQUEE_FX_MARGIN: f64 = 16.0;
 
-/// Width of the start to end color transition, as a fraction of the bar, at a blend setting of 100.
+/// Width of the start to end color transition, as a fraction of the gradient axis, at a blend setting of 100.
 /// Smaller settings scale linearly down to 0 (a hard edge).
 const MAX_BLEND_WIDTH: f64 = 0.25;
 
@@ -217,28 +217,68 @@ fn draw_background(cr: &Context, card: Rect, frame: &Frame, fallback: Rgb) {
         }
     }
 
-    let gradient = progress_gradient(card, color_start, color_end, 1.0, progress, blend);
+    let gradient = progress_gradient(
+        gradient_axis(card, frame.config.background_gradient_flow()),
+        color_start,
+        color_end,
+        1.0,
+        progress,
+        blend,
+    );
     cr.set_source(&gradient).ok();
     cr.paint_with_alpha(frame.config.background_alpha).ok();
 }
 
-/// Width of the start to end transition as a fraction of the bar: 0 is a hard edge, 100 is `MAX_BLEND_WIDTH`, linear in between.
+/// Width of the start to end transition as a fraction of the gradient axis: 0 is a hard edge, 100 is `MAX_BLEND_WIDTH`, linear in between.
 fn blend_width(setting: u32) -> f64 {
     setting.min(100) as f64 / 100.0 * MAX_BLEND_WIDTH
 }
 
-/// Horizontal gradient across `bar`: solid `start` up to `progress`, then fading to `end` over the next `blend` of the width.
-/// Same as a CSS gradient with stops at `progress` and `progress + blend`; both are fractions of the bar width.
+/// Start and end points of a linear gradient that spans `rect` in the given direction.
+/// Named diagonals run corner to corner; custom angles use a true angle where 0 is left to right and 90 is top to bottom.
+fn gradient_axis(rect: Rect, flow: GradientFlow) -> ((f64, f64), (f64, f64)) {
+    let left = rect.x;
+    let right = rect.right();
+    let top = rect.y;
+    let bottom = rect.y + rect.height;
+    let center_x = rect.x + rect.width / 2.0;
+    let center_y = rect.y + rect.height / 2.0;
+
+    match flow {
+        GradientFlow::Ltr => ((left, center_y), (right, center_y)),
+        GradientFlow::Rtl => ((right, center_y), (left, center_y)),
+        GradientFlow::Ttb => ((center_x, top), (center_x, bottom)),
+        GradientFlow::Btt => ((center_x, bottom), (center_x, top)),
+        GradientFlow::TlBr => ((left, top), (right, bottom)),
+        GradientFlow::TrBl => ((right, top), (left, bottom)),
+        GradientFlow::BlTr => ((left, bottom), (right, top)),
+        GradientFlow::BrTl => ((right, bottom), (left, top)),
+        GradientFlow::Angle(degrees) => {
+            let radians = degrees.to_radians();
+            let (sin, cos) = radians.sin_cos();
+            // Half the projection of the rectangle onto the flow axis, so the gradient covers every corner.
+            let half = (cos.abs() * rect.width + sin.abs() * rect.height) / 2.0;
+            (
+                (center_x - cos * half, center_y - sin * half),
+                (center_x + cos * half, center_y + sin * half),
+            )
+        }
+    }
+}
+
+/// Gradient along `axis`: solid `start` up to `progress`, then fading to `end` over the next `blend` of the axis.
+/// Same as a CSS gradient with stops at `progress` and `progress + blend`; both are fractions of the axis length.
 fn progress_gradient(
-    bar: Rect,
+    axis: ((f64, f64), (f64, f64)),
     start: Rgb,
     end: Rgb,
     alpha: f64,
     progress: f64,
     blend: f64,
 ) -> LinearGradient {
+    let ((from_x, from_y), (to_x, to_y)) = axis;
     let progress = progress.clamp(0.0, 1.0);
-    let gradient = LinearGradient::new(bar.x, bar.y, bar.right(), bar.y);
+    let gradient = LinearGradient::new(from_x, from_y, to_x, to_y);
     gradient.add_color_stop_rgba(0.0, start.r, start.g, start.b, alpha);
     gradient.add_color_stop_rgba(progress, start.r, start.g, start.b, alpha);
 
@@ -246,8 +286,8 @@ fn progress_gradient(
         gradient.add_color_stop_rgba(progress + blend, end.r, end.g, end.b, alpha);
         gradient.add_color_stop_rgba(1.0, end.r, end.g, end.b, alpha);
     } else {
-        // The transition runs past the right edge.
-        // Cairo clamps stop offsets to 1.0, which would squeeze the blend into what is left of the bar.
+        // The transition runs past the end of the axis.
+        // Cairo clamps stop offsets to 1.0, which would squeeze the blend into what is left of the axis.
         // Instead stop at the edge with the color the full-width transition has reached there.
         let mixed = start.mix(end, (1.0 - progress) / blend);
         gradient.add_color_stop_rgba(1.0, mixed.r, mixed.g, mixed.b, alpha);
@@ -663,7 +703,7 @@ fn draw_compact_progress(cr: &Context, card: Rect, frame: &Frame) {
         height,
     };
     let gradient = progress_gradient(
-        bar,
+        ((bar.x, bar.y), (bar.right(), bar.y)),
         start_color,
         end_color,
         frame.config.progress_alpha,
@@ -1169,6 +1209,65 @@ mod tests {
         assert!(blend_width(10) < blend_width(60));
         assert!(blend_width(60) < blend_width(100));
         assert_eq!(blend_width(1000), blend_width(100));
+    }
+
+    #[test]
+    fn gradient_axis_follows_the_configured_direction() {
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 200.0,
+            height: 100.0,
+        };
+
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::Ltr),
+            ((10.0, 70.0), (210.0, 70.0))
+        );
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::Rtl),
+            ((210.0, 70.0), (10.0, 70.0))
+        );
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::Ttb),
+            ((110.0, 20.0), (110.0, 120.0))
+        );
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::Btt),
+            ((110.0, 120.0), (110.0, 20.0))
+        );
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::TlBr),
+            ((10.0, 20.0), (210.0, 120.0))
+        );
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::TrBl),
+            ((210.0, 20.0), (10.0, 120.0))
+        );
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::BlTr),
+            ((10.0, 120.0), (210.0, 20.0))
+        );
+        assert_eq!(
+            gradient_axis(rect, GradientFlow::BrTl),
+            ((210.0, 120.0), (10.0, 20.0))
+        );
+    }
+
+    #[test]
+    fn custom_gradient_angle_covers_every_corner() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let ((from_x, from_y), (to_x, to_y)) = gradient_axis(rect, GradientFlow::Angle(45.0));
+
+        assert!((from_x - 25.0).abs() < 1e-9);
+        assert!((from_y + 25.0).abs() < 1e-9);
+        assert!((to_x - 175.0).abs() < 1e-9);
+        assert!((to_y - 125.0).abs() < 1e-9);
     }
 
     #[test]

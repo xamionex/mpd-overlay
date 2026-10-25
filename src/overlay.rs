@@ -51,8 +51,64 @@ struct Inner {
     initialized: bool,
     last_key: Option<String>,
     last_state: Option<mpd::State>,
+    progress_triggers: ProgressTriggers,
     pending_now: Option<NowPlaying>,
     transitioning: bool,
+}
+
+/// `show_on_progress` thresholds that have already fired for the current song.
+#[derive(Default)]
+struct ProgressTriggers {
+    fired: Vec<u32>,
+    last_percent: f64,
+}
+
+impl ProgressTriggers {
+    /// Marks every threshold at or below the current position as already shown.
+    /// Used when a song starts, because the song change itself already shows the overlay.
+    fn reset(&mut self, thresholds: &[u32], progress_percent: f64) {
+        let percent = progress_percent.clamp(0.0, 100.0);
+        self.fired.clear();
+        self.fired.extend(
+            thresholds
+                .iter()
+                .copied()
+                .filter(|threshold| *threshold as f64 <= percent + 0.001),
+        );
+        self.last_percent = percent;
+    }
+
+    /// Returns true when the position crossed a threshold that has not fired for this song yet.
+    /// A backward jump (seek or loop) re-arms the thresholds above the new position.
+    fn crossed(&mut self, thresholds: &[u32], progress_percent: f64) -> bool {
+        let percent = progress_percent.clamp(0.0, 100.0);
+        if percent + 0.001 < self.last_percent {
+            self.fired.clear();
+            self.fired.extend(
+                thresholds
+                    .iter()
+                    .copied()
+                    .filter(|threshold| *threshold as f64 <= percent + 0.001),
+            );
+            self.last_percent = percent;
+            return false;
+        }
+        self.last_percent = percent;
+
+        let mut triggered = false;
+        for threshold in thresholds {
+            if percent + 0.001 >= *threshold as f64 && !self.fired.contains(threshold) {
+                self.fired.push(*threshold);
+                triggered = true;
+            }
+        }
+        triggered
+    }
+
+    fn clear(&mut self) {
+        self.fired.clear();
+        self.last_percent = 0.0;
+    }
 }
 
 #[derive(Clone)]
@@ -139,6 +195,7 @@ impl Overlay {
             initialized: false,
             last_key: None,
             last_state: None,
+            progress_triggers: ProgressTriggers::default(),
             pending_now: None,
             transitioning: false,
         }));
@@ -195,7 +252,20 @@ impl Overlay {
 
         let mut inner = self.inner.borrow_mut();
         inner.fallback = fallback;
+        let previous_thresholds = inner.config.show_on_progress_percentages();
+        let progress_thresholds = config.show_on_progress_percentages();
         inner.config = config.clone();
+        if progress_thresholds != previous_thresholds {
+            // A newly added threshold that the song has already passed should not fire on the next update.
+            let progress_percent = inner
+                .now
+                .as_ref()
+                .map(|now| progress_for(Some(now), smooth_elapsed(now, inner.received_at)) * 100.0)
+                .unwrap_or(0.0);
+            inner
+                .progress_triggers
+                .reset(&progress_thresholds, progress_percent);
+        }
         // The accent depends on the config (`always_brighten_colors`), so re-derive it from the stored cover average.
         // Otherwise a change would only show up once the next cover is loaded.
         inner.accent = match inner.average_color {
@@ -226,6 +296,7 @@ impl Overlay {
                     inner.initialized = false;
                     inner.last_key = None;
                     inner.last_state = None;
+                    inner.progress_triggers.clear();
                     inner.pending_now = None;
                     inner.transitioning = false;
                 }
@@ -244,6 +315,7 @@ impl Overlay {
             inner.initialized = true;
             inner.last_key = now.song_key.clone();
             inner.last_state = Some(mpd::State::Stop);
+            inner.progress_triggers.clear();
             drop(inner);
             self.hide();
             return;
@@ -254,6 +326,12 @@ impl Overlay {
         let visible = inner.opacity > 0.0001 || inner.fade_to > 0.0;
 
         if !was_initialized {
+            let progress_percent = progress_for(Some(&now), now.elapsed) * 100.0;
+            let progress_thresholds = inner.config.show_on_progress_percentages();
+            inner
+                .progress_triggers
+                .reset(&progress_thresholds, progress_percent);
+
             if now.state == mpd::State::Play {
                 update_cover(&mut inner, &now);
                 inner.now = Some(now.clone());
@@ -307,7 +385,27 @@ impl Overlay {
         inner.transitioning = false;
         inner.initialized = true;
 
-        if song_changed || state_changed {
+        let progress_percent = progress_for(Some(&now), now.elapsed) * 100.0;
+        let progress_thresholds = inner.config.show_on_progress_percentages();
+        if song_changed {
+            inner
+                .progress_triggers
+                .reset(&progress_thresholds, progress_percent);
+        }
+        let progress_triggered = now.state == mpd::State::Play
+            && inner
+                .progress_triggers
+                .crossed(&progress_thresholds, progress_percent);
+
+        if !state_shows(&inner.config, now.state) {
+            drop(inner);
+            if visible {
+                self.hide();
+            }
+            return;
+        }
+
+        if song_changed || state_changed || progress_triggered {
             drop(inner);
             self.show();
         } else if visible {
@@ -413,6 +511,11 @@ impl Overlay {
                 inner.last_key = next.song_key.clone();
                 inner.last_state = Some(next.state);
                 inner.initialized = true;
+                let progress_percent = progress_for(Some(&next), next.elapsed) * 100.0;
+                let progress_thresholds = inner.config.show_on_progress_percentages();
+                inner
+                    .progress_triggers
+                    .reset(&progress_thresholds, progress_percent);
 
                 inner.visible_until = if inner.config.timeout_ms == 0 {
                     None
@@ -504,6 +607,12 @@ fn start_fade(inner: &mut Inner, target: f64, now: Instant) {
     if inner.config.fade_ms == 0 {
         inner.opacity = target;
     }
+}
+
+/// Whether the overlay should stay visible for a playback state.
+/// Stop is handled before this; pause is the only state the config can opt out of showing.
+fn state_shows(config: &OverlayConfig, state: mpd::State) -> bool {
+    state != mpd::State::Pause || config.show_on_pause
 }
 
 fn configure_x11(window: &gtk::Window, x11: bool) {
@@ -723,6 +832,74 @@ mod tests {
             ..OverlayConfig::default()
         };
         assert!(accent_from(dark, &on).brightness() > dark.brightness());
+    }
+
+    #[test]
+    fn show_on_pause_controls_whether_pause_keeps_the_overlay_visible() {
+        let mut config = OverlayConfig::default();
+        assert!(state_shows(&config, mpd::State::Pause));
+        assert!(state_shows(&config, mpd::State::Play));
+
+        config.show_on_pause = false;
+        assert!(!state_shows(&config, mpd::State::Pause));
+        assert!(state_shows(&config, mpd::State::Play));
+    }
+
+    #[test]
+    fn progress_thresholds_fire_once_per_song() {
+        let mut triggers = ProgressTriggers::default();
+        let thresholds = [25, 50, 75];
+
+        assert!(!triggers.crossed(&thresholds, 10.0));
+        assert!(!triggers.crossed(&thresholds, 24.0));
+        assert!(triggers.crossed(&thresholds, 25.0));
+        assert!(!triggers.crossed(&thresholds, 30.0));
+        assert!(triggers.crossed(&thresholds, 50.0));
+        assert!(!triggers.crossed(&thresholds, 60.0));
+        assert!(triggers.crossed(&thresholds, 75.0));
+        assert!(!triggers.crossed(&thresholds, 80.0));
+    }
+
+    #[test]
+    fn seeking_backward_lets_thresholds_fire_again() {
+        let mut triggers = ProgressTriggers::default();
+        let thresholds = [50];
+
+        assert!(triggers.crossed(&thresholds, 55.0));
+        assert!(!triggers.crossed(&thresholds, 60.0));
+
+        // A seek or loop back below the threshold arms it again without showing immediately.
+        assert!(!triggers.crossed(&thresholds, 10.0));
+        assert!(triggers.crossed(&thresholds, 55.0));
+    }
+
+    #[test]
+    fn seeking_back_above_a_threshold_only_rearms_later_ones() {
+        let mut triggers = ProgressTriggers::default();
+        let thresholds = [25, 50, 75];
+
+        assert!(triggers.crossed(&thresholds, 80.0));
+        assert!(!triggers.crossed(&thresholds, 60.0));
+        assert_eq!(triggers.fired, vec![25, 50]);
+        assert!(triggers.crossed(&thresholds, 75.0));
+    }
+
+    #[test]
+    fn starting_mid_song_marks_passed_thresholds_as_fired() {
+        let mut triggers = ProgressTriggers::default();
+        let thresholds = [25, 50, 75];
+        triggers.reset(&thresholds, 60.0);
+
+        assert_eq!(triggers.fired, vec![25, 50]);
+        assert!(!triggers.crossed(&thresholds, 61.0));
+        assert!(triggers.crossed(&thresholds, 75.0));
+    }
+
+    #[test]
+    fn empty_progress_list_disables_the_triggers() {
+        let mut triggers = ProgressTriggers::default();
+        assert!(!triggers.crossed(&[], 50.0));
+        assert!(triggers.fired.is_empty());
     }
 
     const MONITOR: (i32, i32, i32, i32) = (0, 0, 1920, 1080);

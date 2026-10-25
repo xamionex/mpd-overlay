@@ -103,6 +103,20 @@ const FIELDS: &[Field] = &[
         kind: FieldKind::Integer,
     },
     Field {
+        key: "show_on_pause",
+        label: "Show on pause",
+        help: "Show the overlay when playback pauses; off hides it while paused",
+        section: "Visibility",
+        kind: FieldKind::Bool,
+    },
+    Field {
+        key: "show_on_progress",
+        label: "Show on progress",
+        help: "Track percentages to show at, e.g. 25,50,75; empty disables",
+        section: "Visibility",
+        kind: FieldKind::Text,
+    },
+    Field {
         key: "fade_ms",
         label: "Fade duration",
         help: "Fade animation duration in milliseconds",
@@ -182,9 +196,16 @@ const FIELDS: &[Field] = &[
         kind: FieldKind::Text,
     },
     Field {
+        key: "background_gradient_direction",
+        label: "Gradient flow",
+        help: "ltr, rtl, ttb, btt, diagonals, or 45deg (0deg = ltr, 90deg = ttb)",
+        section: "Color",
+        kind: FieldKind::Text,
+    },
+    Field {
         key: "background_blend",
         label: "Background blend",
-        help: "0 = hard edge, 100 = soft blend (about 25% of the width)",
+        help: "0 = hard edge, 100 = soft blend (about 25% of the flow)",
         section: "Color",
         kind: FieldKind::Integer,
     },
@@ -599,6 +620,17 @@ impl App {
                     let next = ((current as i64 + delta).rem_euclid(choices.len() as i64)) as usize;
                     self.config.overlay.background = choices[next].to_string();
                 }
+                "background_gradient_direction" => {
+                    let choices = [
+                        "ltr", "rtl", "ttb", "btt", "tl-br", "tr-bl", "bl-tr", "br-tl",
+                    ];
+                    let current = choices
+                        .iter()
+                        .position(|c| *c == self.config.overlay.background_gradient_direction)
+                        .unwrap_or(0);
+                    let next = ((current as i64 + delta).rem_euclid(choices.len() as i64)) as usize;
+                    self.config.overlay.background_gradient_direction = choices[next].to_string();
+                }
                 "anchor" => {
                     let choices = [
                         "top-left",
@@ -718,6 +750,9 @@ impl App {
     fn toggle_bool(&mut self, key: &str) {
         match key {
             "use_cover" => self.config.mpd.use_cover = !self.config.mpd.use_cover,
+            "show_on_pause" => {
+                self.config.overlay.show_on_pause = !self.config.overlay.show_on_pause
+            }
             "center_text" => self.config.overlay.center_text = !self.config.overlay.center_text,
             "timestamps_matching_colors" => {
                 self.config.overlay.timestamps_matching_colors =
@@ -800,6 +835,8 @@ impl App {
             "offset_y" => self.config.overlay.offset_y.to_string(),
             "monitor" => self.config.overlay.monitor.clone(),
             "timeout_ms" => self.config.overlay.timeout_ms.to_string(),
+            "show_on_pause" => self.config.overlay.show_on_pause.to_string(),
+            "show_on_progress" => self.config.overlay.show_on_progress.clone(),
             "fade_ms" => self.config.overlay.fade_ms.to_string(),
             "scroll_ms" => self.config.overlay.scroll_ms.to_string(),
             "progress" => self.config.overlay.progress.clone(),
@@ -811,6 +848,9 @@ impl App {
             "background_color" => self.config.overlay.background_color.clone(),
             "background_start_color" => self.config.overlay.background_start_color.clone(),
             "background_end_color" => self.config.overlay.background_end_color.clone(),
+            "background_gradient_direction" => {
+                self.config.overlay.background_gradient_direction.clone()
+            }
             "background_blend" => self.config.overlay.background_blend.to_string(),
             "border" => self.config.overlay.border.clone(),
             "fallback_color" => self.config.overlay.fallback_color.clone(),
@@ -896,6 +936,11 @@ impl App {
             "timeout_ms" => {
                 self.config.overlay.timeout_ms = value.parse().map_err(|_| "number".to_string())?
             }
+            "show_on_pause" => {
+                self.config.overlay.show_on_pause =
+                    value.parse().map_err(|_| "boolean".to_string())?
+            }
+            "show_on_progress" => self.config.overlay.show_on_progress = value.to_string(),
             "fade_ms" => {
                 self.config.overlay.fade_ms = value.parse().map_err(|_| "number".to_string())?
             }
@@ -919,6 +964,9 @@ impl App {
                 self.config.overlay.background_start_color = value.to_string()
             }
             "background_end_color" => self.config.overlay.background_end_color = value.to_string(),
+            "background_gradient_direction" => {
+                self.config.overlay.background_gradient_direction = value.to_string()
+            }
             "background_blend" => {
                 self.config.overlay.background_blend =
                     value.parse().map_err(|_| "number".to_string())?
@@ -1036,6 +1084,7 @@ impl App {
             FieldKind::Bool => {
                 let value = match key {
                     "use_cover" => self.config.mpd.use_cover,
+                    "show_on_pause" => self.config.overlay.show_on_pause,
                     "center_text" => self.config.overlay.center_text,
                     "timestamps_matching_colors" => self.config.overlay.timestamps_matching_colors,
                     "timestamps_invert_colors" => self.config.overlay.timestamps_invert_colors,
@@ -1474,5 +1523,16 @@ mod tests {
         app.normalize_selection();
         app.activate();
         assert_ne!(app.config.overlay.title_matching_colors, original);
+    }
+
+    #[test]
+    fn tui_canonicalizes_show_on_progress() {
+        let path = std::env::temp_dir().join("mpd-tui-progress-test.toml");
+        let mut app = App::load(path);
+        app.apply_text("show_on_progress", "25, 50, 75").unwrap();
+        assert_eq!(
+            app.current_value_string("show_on_progress").as_deref(),
+            Some("25,50,75")
+        );
     }
 }

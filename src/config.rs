@@ -2,6 +2,9 @@ use dirs;
 use serde::Deserialize;
 use std::{fs, path::PathBuf};
 
+/// Track percentage used by `show_on_progress` when the option is left at its default.
+const DEFAULT_SHOW_ON_PROGRESS: &str = "0";
+
 #[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -35,6 +38,9 @@ pub struct OverlayConfig {
     pub offset_y: i32,
     pub monitor: String,
     pub timeout_ms: u64,
+    pub show_on_pause: bool,
+    #[serde(deserialize_with = "deserialize_progress_percentages")]
+    pub show_on_progress: String,
     pub fade_ms: u64,
     pub progress: String,
     pub center_text: bool,
@@ -42,6 +48,7 @@ pub struct OverlayConfig {
     pub background_color: String,
     pub background_start_color: String,
     pub background_end_color: String,
+    pub background_gradient_direction: String,
     pub background_blend: u32,
     pub border: String,
     #[serde(alias = "matching_colors")]
@@ -122,6 +129,8 @@ impl Default for OverlayConfig {
             offset_y: 0,
             monitor: "primary".to_string(),
             timeout_ms: 0,
+            show_on_pause: true,
+            show_on_progress: DEFAULT_SHOW_ON_PROGRESS.to_string(),
             fade_ms: 500,
             progress: "bar".to_string(),
             center_text: true,
@@ -129,6 +138,7 @@ impl Default for OverlayConfig {
             background_color: "#2c2c2c".to_string(),
             background_start_color: "#2c2c2c".to_string(),
             background_end_color: "#161616".to_string(),
+            background_gradient_direction: "ltr".to_string(),
             background_blend: 10,
             border: "#161616".to_string(),
             timestamps_matching_colors: true,
@@ -218,6 +228,10 @@ impl OverlayConfig {
                 self.background = "progress".to_string();
             }
         }
+
+        self.background_gradient_direction =
+            gradient_flow_name(parse_gradient_flow(&self.background_gradient_direction));
+        self.show_on_progress = canonical_progress_percentages(&self.show_on_progress);
         self
     }
 
@@ -240,6 +254,204 @@ impl OverlayConfig {
     pub fn shows_compact_progress(&self) -> bool {
         self.progress == "compact" || self.progress == "line"
     }
+
+    pub fn background_gradient_flow(&self) -> GradientFlow {
+        parse_gradient_flow(&self.background_gradient_direction)
+    }
+
+    pub fn show_on_progress_percentages(&self) -> Vec<u32> {
+        parse_progress_percentages(&self.show_on_progress)
+    }
+}
+
+/// Direction the background gradient flows in.
+/// Named diagonals run corner to corner; `Angle` is in degrees where 0 is left to right and 90 is top to bottom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GradientFlow {
+    Ltr,
+    Rtl,
+    Ttb,
+    Btt,
+    TlBr,
+    TrBl,
+    BlTr,
+    BrTl,
+    Angle(f64),
+}
+
+fn parse_gradient_flow(value: &str) -> GradientFlow {
+    let trimmed = value.trim().to_ascii_lowercase();
+    let normalized = trimmed.replace('_', "-").replace(' ', "-");
+
+    match normalized.as_str() {
+        "ltr" | "left-to-right" | "to-right" | "right" => GradientFlow::Ltr,
+        "rtl" | "right-to-left" | "to-left" | "left" => GradientFlow::Rtl,
+        "ttb" | "top-to-bottom" | "to-bottom" | "down" => GradientFlow::Ttb,
+        "btt" | "bottom-to-top" | "to-top" | "up" => GradientFlow::Btt,
+        "tl-br" | "top-left-to-bottom-right" | "to-bottom-right" => GradientFlow::TlBr,
+        "tr-bl" | "top-right-to-bottom-left" | "to-bottom-left" => GradientFlow::TrBl,
+        "bl-tr" | "bottom-left-to-top-right" | "to-top-right" => GradientFlow::BlTr,
+        "br-tl" | "bottom-right-to-top-left" | "to-top-left" => GradientFlow::BrTl,
+        _ => parse_gradient_angle(&trimmed)
+            .or_else(|| parse_gradient_angle(&normalized))
+            .map(|degrees| GradientFlow::Angle(normalize_angle(degrees)))
+            .unwrap_or(GradientFlow::Ltr),
+    }
+}
+
+fn parse_gradient_angle(value: &str) -> Option<f64> {
+    let number = value.strip_suffix("deg").unwrap_or(value).trim();
+    number
+        .parse::<f64>()
+        .ok()
+        .filter(|degrees| degrees.is_finite())
+}
+
+/// Folds an angle into `0..360`, rounded to two decimals so float noise never reaches the config.
+fn normalize_angle(degrees: f64) -> f64 {
+    if !degrees.is_finite() {
+        return 0.0;
+    }
+    let normalized = degrees.rem_euclid(360.0);
+    let rounded = (normalized * 100.0).round() / 100.0;
+    if rounded >= 360.0 {
+        0.0
+    } else {
+        rounded
+    }
+}
+
+fn gradient_flow_name(flow: GradientFlow) -> String {
+    match flow {
+        GradientFlow::Ltr => "ltr".to_string(),
+        GradientFlow::Rtl => "rtl".to_string(),
+        GradientFlow::Ttb => "ttb".to_string(),
+        GradientFlow::Btt => "btt".to_string(),
+        GradientFlow::TlBr => "tl-br".to_string(),
+        GradientFlow::TrBl => "tr-bl".to_string(),
+        GradientFlow::BlTr => "bl-tr".to_string(),
+        GradientFlow::BrTl => "br-tl".to_string(),
+        GradientFlow::Angle(degrees) => {
+            let degrees = normalize_angle(degrees);
+            if degrees == 0.0 {
+                "ltr".to_string()
+            } else if degrees == 90.0 {
+                "ttb".to_string()
+            } else if degrees == 180.0 {
+                "rtl".to_string()
+            } else if degrees == 270.0 {
+                "btt".to_string()
+            } else {
+                format!("{degrees}deg")
+            }
+        }
+    }
+}
+
+/// Track percentages at which the overlay should be shown.
+/// Values may be separated by commas, semicolons, or whitespace, and are clamped to 0..=100.
+fn parse_progress_percentages(value: &str) -> Vec<u32> {
+    let mut percentages: Vec<u32> = value
+        .split(|character: char| character == ',' || character == ';' || character.is_whitespace())
+        .filter_map(parse_progress_percentage)
+        .collect();
+    percentages.sort_unstable();
+    percentages.dedup();
+    percentages
+}
+
+fn parse_progress_percentage(token: &str) -> Option<u32> {
+    let token = token.trim().trim_end_matches('%').trim();
+    if token.is_empty() {
+        return None;
+    }
+    let value = token.parse::<f64>().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    Some(value.round().clamp(0.0, 100.0) as u32)
+}
+
+fn canonical_progress_percentages(value: &str) -> String {
+    let percentages = parse_progress_percentages(value);
+    if percentages.is_empty() && !value.trim().is_empty() {
+        // A typo should not silently turn the feature off.
+        return DEFAULT_SHOW_ON_PROGRESS.to_string();
+    }
+    percentages
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Accepts either a delimited string or a TOML list of percentages, so both `"25, 50, 75"` and `[25, 50, 75]` work.
+fn deserialize_progress_percentages<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ProgressPercentagesVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for ProgressPercentagesVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a percentage string or a list of percentages")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(canonical_progress_percentages(value))
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(canonical_progress_percentages(&value))
+        }
+
+        fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(canonical_progress_percentages(&value.to_string()))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(canonical_progress_percentages(&value.to_string()))
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(canonical_progress_percentages(&value.to_string()))
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = sequence.next_element::<f64>()? {
+                values.push(value);
+            }
+            let joined = values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            Ok(canonical_progress_percentages(&joined))
+        }
+    }
+
+    deserializer.deserialize_any(ProgressPercentagesVisitor)
 }
 
 impl Config {
@@ -357,5 +569,100 @@ mod tests {
         assert_eq!(flag("artist_glow"), Some(false));
         assert_eq!(flag("timestamps_glow"), Some(true));
         assert_eq!(flag("title_glow_matching_colors"), None);
+    }
+
+    #[test]
+    fn missing_new_options_use_defaults() {
+        let config: Config = toml::from_str("[overlay]\nwidth = 640\n").unwrap();
+        assert!(config.overlay.show_on_pause);
+        assert_eq!(config.overlay.show_on_progress, "50");
+        assert_eq!(config.overlay.background_gradient_direction, "ltr");
+    }
+
+    #[test]
+    fn gradient_direction_is_normalized() {
+        let sanitized = |value: &str| {
+            OverlayConfig {
+                background_gradient_direction: value.to_string(),
+                ..OverlayConfig::default()
+            }
+            .sanitized()
+            .background_gradient_direction
+        };
+
+        assert_eq!(sanitized("LTR"), "ltr");
+        assert_eq!(sanitized(" Top_To_Bottom "), "ttb");
+        assert_eq!(sanitized("bottom-right-to-top-left"), "br-tl");
+        assert_eq!(sanitized("45deg"), "45deg");
+        assert_eq!(sanitized("45 deg"), "45deg");
+        assert_eq!(sanitized("-45"), "315deg");
+        assert_eq!(sanitized("450"), "ttb");
+        assert_eq!(sanitized("sideways"), "ltr");
+    }
+
+    #[test]
+    fn gradient_direction_parses_into_flows() {
+        let flow = |value: &str| {
+            OverlayConfig {
+                background_gradient_direction: value.to_string(),
+                ..OverlayConfig::default()
+            }
+            .background_gradient_flow()
+        };
+
+        assert_eq!(flow("ltr"), GradientFlow::Ltr);
+        assert_eq!(flow("rtl"), GradientFlow::Rtl);
+        assert_eq!(flow("ttb"), GradientFlow::Ttb);
+        assert_eq!(flow("btt"), GradientFlow::Btt);
+        assert_eq!(flow("tl-br"), GradientFlow::TlBr);
+        assert_eq!(flow("135deg"), GradientFlow::Angle(135.0));
+        assert_eq!(flow("nonsense"), GradientFlow::Ltr);
+    }
+
+    #[test]
+    fn show_on_pause_is_on_by_default() {
+        assert!(OverlayConfig::default().show_on_pause);
+    }
+
+    #[test]
+    fn progress_percentages_accept_common_separators() {
+        let sanitized = |value: &str| {
+            OverlayConfig {
+                show_on_progress: value.to_string(),
+                ..OverlayConfig::default()
+            }
+            .sanitized()
+            .show_on_progress
+        };
+
+        assert_eq!(sanitized("25,50,75"), "25,50,75");
+        assert_eq!(sanitized("25, 50, 75"), "25,50,75");
+        assert_eq!(sanitized("25 50 75"), "25,50,75");
+        assert_eq!(sanitized("75,25,50,50"), "25,50,75");
+        assert_eq!(sanitized("25% 50% 75%"), "25,50,75");
+        assert_eq!(sanitized("150,-5"), "0,100");
+        assert_eq!(sanitized(""), "");
+        assert_eq!(sanitized("nonsense"), "50");
+    }
+
+    #[test]
+    fn progress_option_accepts_strings_lists_and_numbers() {
+        let from_string: Config =
+            toml::from_str("[overlay]\nshow_on_progress = \"25, 50, 75\"\n").unwrap();
+        assert_eq!(from_string.overlay.show_on_progress, "25,50,75");
+
+        let from_list: Config =
+            toml::from_str("[overlay]\nshow_on_progress = [75, 25, 50]\n").unwrap();
+        assert_eq!(from_list.overlay.show_on_progress, "25,50,75");
+
+        let from_number: Config = toml::from_str("[overlay]\nshow_on_progress = 50\n").unwrap();
+        assert_eq!(from_number.overlay.show_on_progress, "50");
+    }
+
+    #[test]
+    fn show_on_progress_defaults_to_half() {
+        let config = OverlayConfig::default();
+        assert_eq!(config.show_on_progress, "50");
+        assert_eq!(config.show_on_progress_percentages(), vec![50]);
     }
 }
